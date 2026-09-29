@@ -3,20 +3,53 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>视频人物关键帧提取器</title>
+<title>视频人物关键帧提取器 v0.2</title>
 <link rel="stylesheet" href="style.css">
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 </head>
 <body>
-<header><div><h1>视频人物关键帧提取器</h1><p>浏览器本地识别人像 · 抽取原始帧 · 相似画面去重 · 不上传视频</p></div><span id="modelBadge">模型加载中…</span></header>
+<header>
+  <div><div class="eyebrow">VIDEO PERSON FRAME EXTRACTOR · v0.2</div><h1>视频人物关键帧提取器</h1><p>场景变化预筛 · 自适应人物检测 · 每镜头挑选最佳帧 · 浏览器本地处理</p></div>
+  <div class="badges"><span class="badge accent">v0.2 智能扫描</span><span class="badge" id="modelBadge">模型加载中…</span></div>
+</header>
 <main>
-<section class="panel source"><h2>1. 选择视频</h2><label class="drop"><input id="fileInput" type="file" accept="video/*"><b>选择本地视频</b><span>MP4 / WebM / 浏览器可解码的视频</span></label><div class="urlRow"><input id="urlInput" placeholder="或输入可直接访问的视频 URL（需允许 CORS）"><button id="loadUrl">载入 URL</button></div><video id="video" controls playsinline crossorigin="anonymous"></video></section>
-<section class="panel settings"><h2>2. 参数</h2><div class="grid"><label>扫描模式<select id="scanMode"><option value="adaptive" selected>自适应（推荐）</option><option value="fixed">固定间隔</option></select></label><label>人物置信度<input id="confidence" type="number" min="0.1" max="0.99" step="0.05" value="0.55"></label><label>场景预扫间隔（秒）<input id="sceneInterval" type="number" min="0.25" step="0.25" value="1.0"></label><label>场景变化阈值<input id="sceneThreshold" type="number" min="0.02" max="0.5" step="0.01" value="0.08"></label><label>最长人物检测间隔（秒）<input id="maxGap" type="number" min="2" max="60" step="1" value="10"></label><label>固定采样间隔（秒）<input id="interval" type="number" min="0.1" step="0.1" value="1.0"></label><label>最小人物画面占比<input id="minArea" type="number" min="0" max="1" step="0.01" value="0.03"></label><label>相似度去重阈值<input id="dupThreshold" type="number" min="0" max="32" step="1" value="8"></label><label>最多保留帧数<input id="maxFrames" type="number" min="1" max="500" step="1" value="100"></label></div><p class="hint">自适应模式先用低分辨率画面差异判断镜头变化，只在场景变化或达到最长间隔时运行人物模型。</p><div class="actions"><button class="primary" id="start">开始识别</button><button id="cancel" disabled>停止</button></div><progress id="progress" max="1" value="0"></progress><div id="status">请选择视频。</div></section>
-<section class="panel results"><div class="resultHead"><div><h2>3. 结果</h2><p id="summary">尚未处理</p></div><div class="actions"><button id="downloadJson" disabled>people.json</button><button id="downloadSheet" disabled>缩略图总览</button><button class="primary" id="downloadZip" disabled>下载 ZIP</button></div></div><div id="gallery" class="gallery"></div></section>
+<section class="panel source">
+  <h2>1. 选择视频</h2>
+  <label class="drop"><input id="fileInput" type="file" accept="video/*"><b>选择本地视频</b><span>推荐方式：MP4 / WebM / 浏览器可解码的视频</span></label>
+  <div class="urlRow"><input id="urlInput" placeholder="或输入可直接访问的视频 URL（需允许 CORS）"><button id="loadUrl">载入 URL</button></div>
+  <video id="video" controls playsinline crossorigin="anonymous"></video>
+</section>
+
+<section class="panel settings">
+  <div class="titleRow"><div><h2>2. 智能扫描参数</h2><p>先用轻量场景差异筛选，再决定是否调用人物模型。</p></div></div>
+  <div class="presets"><button data-preset="fast">快速</button><button class="active" data-preset="balanced">平衡</button><button data-preset="dense">精细</button></div>
+  <div class="grid">
+    <label>场景扫描步长（秒）<input id="scanStep" type="number" min="0.25" step="0.25" value="1.5"><small>便宜的场景变化检测频率</small></label>
+    <label>场景变化敏感度<input id="sceneThreshold" type="number" min="0.03" max="0.60" step="0.01" value="0.18"><small>越低越容易触发新镜头</small></label>
+    <label>人物兜底检测间隔（秒）<input id="probeInterval" type="number" min="1" step="1" value="8"><small>即使镜头没切也会周期检测</small></label>
+    <label>每镜头最多保留<input id="maxPerScene" type="number" min="1" max="5" step="1" value="2"><small>连续画面只留更好的 1～3 帧</small></label>
+    <label>人物置信度<input id="confidence" type="number" min="0.1" max="0.99" step="0.05" value="0.55"></label>
+    <label>最小人物画面占比<input id="minArea" type="number" min="0" max="1" step="0.01" value="0.02"></label>
+    <label>同镜头相似去重阈值<input id="dupThreshold" type="number" min="0" max="32" step="1" value="8"></label>
+    <label>最多保留总帧数<input id="maxFrames" type="number" min="1" max="500" step="1" value="80"></label>
+  </div>
+  <div class="actions"><button class="primary" id="start">开始智能识别</button><button id="cancel" disabled>停止</button></div>
+  <progress id="progress" max="1" value="0"></progress>
+  <div id="status">请选择视频。</div>
+  <div id="runStats" class="stats"></div>
+</section>
+
+<section class="panel results">
+  <div class="resultHead">
+    <div><h2>3. 人物关键帧</h2><p id="summary">尚未处理</p></div>
+    <div class="actions"><button id="downloadJson" disabled>people.json</button><button id="downloadSheet" disabled>缩略图总览</button><button class="primary" id="downloadZip" disabled>下载 ZIP</button></div>
+  </div>
+  <div id="gallery" class="gallery"></div>
+</section>
 </main>
-<canvas id="detectCanvas" hidden></canvas><canvas id="fullCanvas" hidden></canvas>
-<footer>仅检测 COCO 的 person 类；相似去重针对画面，不做身份识别或人脸识别。</footer>
+<canvas id="sceneCanvas" hidden></canvas><canvas id="detectCanvas" hidden></canvas><canvas id="fullCanvas" hidden></canvas>
+<footer>v0.2 只检测 person，并按镜头挑选关键帧；不做人脸识别、不判断人物身份。网络 URL 仍受来源站点 CORS / 鉴权限制。</footer>
 <script src="app.js"></script>
 </body></html>
