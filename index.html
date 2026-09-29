@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>视频人物关键帧提取器</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+</head>
+<body>
+<header><div><h1>视频人物关键帧提取器</h1><p>浏览器本地识别人像 · 抽取原始帧 · 相似画面去重 · 不上传视频</p></div><span id="modelBadge">模型加载中…</span></header>
+<main>
+<section class="panel source"><h2>1. 选择视频</h2><label class="drop"><input id="fileInput" type="file" accept="video/*"><b>选择本地视频</b><span>MP4 / WebM / 浏览器可解码的视频</span></label><div class="urlRow"><input id="urlInput" placeholder="或输入可直接访问的视频 URL（需允许 CORS）"><button id="loadUrl">载入 URL</button></div><video id="video" controls playsinline crossorigin="anonymous"></video></section>
+<section class="panel settings"><h2>2. 参数</h2><div class="grid"><label>采样间隔（秒）<input id="interval" type="number" min="0.1" step="0.1" value="0.5"></label><label>人物置信度<input id="confidence" type="number" min="0.1" max="0.99" step="0.05" value="0.55"></label><label>最小人物画面占比<input id="minArea" type="number" min="0" max="1" step="0.01" value="0.03"></label><label>相似度去重阈值<input id="dupThreshold" type="number" min="0" max="32" step="1" value="8"></label><label>最多保留帧数<input id="maxFrames" type="number" min="1" max="500" step="1" value="100"></label></div><div class="actions"><button class="primary" id="start">开始识别</button><button id="cancel" disabled>停止</button></div><progress id="progress" max="1" value="0"></progress><div id="status">请选择视频。</div></section>
+<section class="panel results"><div class="resultHead"><div><h2>3. 结果</h2><p id="summary">尚未处理</p></div><div class="actions"><button id="downloadJson" disabled>people.json</button><button id="downloadSheet" disabled>缩略图总览</button><button class="primary" id="downloadZip" disabled>下载 ZIP</button></div></div><div id="gallery" class="gallery"></div></section>
+</main>
+<canvas id="detectCanvas" hidden></canvas><canvas id="fullCanvas" hidden></canvas>
+<footer>仅检测 COCO 的 person 类；相似去重针对画面，不做身份识别或人脸识别。</footer>
+<script src="app.js"></script>
+</body></html>
