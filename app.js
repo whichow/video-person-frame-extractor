@@ -1,6 +1,6 @@
 const $=s=>document.querySelector(s);
-const el={file:$("#fileInput"),url:$("#urlInput"),loadUrl:$("#loadUrl"),video:$("#video"),detect:$("#detectCanvas"),full:$("#fullCanvas"),interval:$("#interval"),confidence:$("#confidence"),minArea:$("#minArea"),dup:$("#dupThreshold"),max:$("#maxFrames"),start:$("#start"),cancel:$("#cancel"),progress:$("#progress"),status:$("#status"),summary:$("#summary"),gallery:$("#gallery"),badge:$("#modelBadge"),json:$("#downloadJson"),sheet:$("#downloadSheet"),zip:$("#downloadZip")};
-let model=null,results=[],stopFlag=false,sourceLabel="",processing=false;
+const el={file:$("#fileInput"),url:$("#urlInput"),loadUrl:$("#loadUrl"),video:$("#video"),detect:$("#detectCanvas"),full:$("#fullCanvas"),mode:$("#scanMode"),sceneInterval:$("#sceneInterval"),sceneThreshold:$("#sceneThreshold"),maxGap:$("#maxGap"),interval:$("#interval"),confidence:$("#confidence"),minArea:$("#minArea"),dup:$("#dupThreshold"),max:$("#maxFrames"),start:$("#start"),cancel:$("#cancel"),progress:$("#progress"),status:$("#status"),summary:$("#summary"),gallery:$("#gallery"),badge:$("#modelBadge"),json:$("#downloadJson"),sheet:$("#downloadSheet"),zip:$("#downloadZip")};
+let model=null,results=[],stopFlag=false,sourceLabel="",processing=false,lastRunStats=null;
 const setStatus=m=>el.status.textContent=m;
 const fmt=t=>{const m=Math.floor(t/60),s=(t%60).toFixed(2).padStart(5,"0");return `${m}:${s}`};
 const saveBlob=(blob,name)=>{const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)};
@@ -17,13 +17,55 @@ function hamming(a,b){let d=0;for(let i=0;i<Math.min(a.length,b.length);i++)if(a
 async function captureOriginal(){el.full.width=el.video.videoWidth;el.full.height=el.video.videoHeight;el.full.getContext("2d").drawImage(el.video,0,0);return canvasBlob(el.full)}
 async function considerFrame(meta,threshold,maxFrames){let dupIndex=-1,bestDist=999;for(let i=0;i<results.length;i++){const d=hamming(meta.hash,results[i].hash);if(d<=threshold&&d<bestDist){bestDist=d;dupIndex=i}}if(dupIndex>=0&&results[dupIndex].score>=meta.score)return false;const blob=await captureOriginal(),item={...meta,blob,url:URL.createObjectURL(blob)};if(dupIndex>=0){URL.revokeObjectURL(results[dupIndex].url);results[dupIndex]=item}else results.push(item);if(results.length>maxFrames){results.sort((a,b)=>b.score-a.score);const removed=results.splice(maxFrames);removed.forEach(r=>URL.revokeObjectURL(r.url))}results.sort((a,b)=>a.time-b.time);return true}
 function renderGallery(){el.gallery.innerHTML="";for(const [i,r] of results.entries()){const card=document.createElement("article");card.className="card";card.innerHTML=`<img src="${r.url}" alt="人物关键帧"><div class="meta"><strong>#${String(i+1).padStart(3,"0")} · ${fmt(r.time)}</strong><small>${r.people.length} 人 · 置信度 ${(r.confidence*100).toFixed(0)}% · 评分 ${r.score.toFixed(3)}</small><button>下载此帧</button></div>`;card.querySelector("button").onclick=()=>saveBlob(r.blob,`frame_${String(i+1).padStart(3,"0")}_${r.time.toFixed(2)}s.jpg`);el.gallery.appendChild(card)}el.summary.textContent=`已保留 ${results.length} 张人物关键帧`;const has=results.length>0;el.json.disabled=el.sheet.disabled=el.zip.disabled=!has}
-function manifest(){return{source:sourceLabel,generated_at:new Date().toISOString(),detector:"TensorFlow.js COCO-SSD lite_mobilenet_v2",video:{width:el.video.videoWidth,height:el.video.videoHeight,duration:el.video.duration},frames:results.map((r,i)=>({index:i+1,timestamp:r.time,score:r.score,sharpness:r.sharpness,confidence:r.confidence,people:r.people}))}}
-async function processVideo(){if(processing)return;if(!model){setStatus("人物模型尚未就绪。");return}try{await waitMetadata()}catch(e){setStatus(e.message);return}if(!Number.isFinite(el.video.duration)||el.video.duration<=0){setStatus("无法读取视频时长。");return}
-resetResults();processing=true;stopFlag=false;el.start.disabled=true;el.cancel.disabled=false;el.progress.value=0;el.video.pause();
-const interval=Math.max(.1,Number(el.interval.value)||.5),confidence=Math.min(.99,Math.max(.1,Number(el.confidence.value)||.55)),minArea=Math.max(0,Number(el.minArea.value)||0),dupThreshold=Math.max(0,Number(el.dup.value)||8),maxFrames=Math.max(1,Number(el.max.value)||100);
-const scale=Math.min(1,960/el.video.videoWidth);el.detect.width=Math.max(1,Math.round(el.video.videoWidth*scale));el.detect.height=Math.max(1,Math.round(el.video.videoHeight*scale));const ctx=el.detect.getContext("2d",{willReadFrequently:true}),total=Math.max(1,Math.ceil(el.video.duration/interval));let sampled=0,hitSamples=0;
-try{for(let t=0;t<el.video.duration;t+=interval){if(stopFlag)break;await seekTo(t);ctx.drawImage(el.video,0,0,el.detect.width,el.detect.height);const predictions=await model.detect(el.detect);const people=predictions.filter(p=>p.class==="person"&&p.score>=confidence&&(p.bbox[2]*p.bbox[3])/(el.detect.width*el.detect.height)>=minArea);if(people.length){hitSamples++;const largest=[...people].sort((a,b)=>b.bbox[2]*b.bbox[3]-a.bbox[2]*a.bbox[3])[0],conf=Math.max(...people.map(p=>p.score)),area=Math.max(...people.map(p=>(p.bbox[2]*p.bbox[3])/(el.detect.width*el.detect.height))),shp=sharpness(el.detect),score=.5*conf+.3*Math.min(1,area*4)+.2*Math.min(1,shp/25),hash=dHash(el.detect,largest.bbox),mapped=people.map(p=>({confidence:+p.score.toFixed(5),bbox:p.bbox.map(v=>+(v/scale).toFixed(2))}));const changed=await considerFrame({time:+t.toFixed(3),score:+score.toFixed(6),sharpness:+shp.toFixed(4),confidence:+conf.toFixed(6),people:mapped,hash},dupThreshold,maxFrames);if(changed)renderGallery()}sampled++;el.progress.value=Math.min(1,sampled/total);setStatus(`正在处理 ${fmt(t)} / ${fmt(el.video.duration)} · 已扫描 ${sampled} 帧 · 检出人物 ${hitSamples} 次 · 保留 ${results.length} 张`)}
-renderGallery();setStatus(stopFlag?`已停止：保留 ${results.length} 张人物关键帧。`:`完成：扫描 ${sampled} 个采样点，保留 ${results.length} 张人物关键帧。`)}catch(e){console.error(e);setStatus("处理失败："+e.message+"。如果使用 URL，请改用本地视频文件测试，部分站点禁止跨域读取视频帧。")}finally{processing=false;el.start.disabled=false;el.cancel.disabled=true}}
+function manifest(){return{source:sourceLabel,generated_at:new Date().toISOString(),detector:"TensorFlow.js COCO-SSD lite_mobilenet_v2",run_stats:lastRunStats,video:{width:el.video.videoWidth,height:el.video.videoHeight,duration:el.video.duration},frames:results.map((r,i)=>({index:i+1,timestamp:r.time,score:r.score,sharpness:r.sharpness,confidence:r.confidence,people:r.people}))}}
+function sceneSignature(canvas){
+ const d=canvas.getContext("2d",{willReadFrequently:true}).getImageData(0,0,canvas.width,canvas.height).data,out=new Uint8Array(canvas.width*canvas.height);
+ for(let i=0,j=0;i<d.length;i+=4,j++)out[j]=Math.round(.299*d[i]+.587*d[i+1]+.114*d[i+2]);
+ return out
+}
+function sceneDifference(a,b){if(!a||!b||a.length!==b.length)return 1;let sum=0;for(let i=0;i<a.length;i++)sum+=Math.abs(a[i]-b[i]);return sum/(a.length*255)}
+function syncModeUI(){const adaptive=el.mode.value==="adaptive";el.sceneInterval.disabled=!adaptive;el.sceneThreshold.disabled=!adaptive;el.maxGap.disabled=!adaptive;el.interval.disabled=adaptive}
+el.mode.addEventListener("change",syncModeUI);syncModeUI();
+async function detectCurrentFrame(t,params){
+ const {ctx,scale,confidence,minArea,dupThreshold,maxFrames}=params;
+ ctx.drawImage(el.video,0,0,el.detect.width,el.detect.height);
+ const predictions=await model.detect(el.detect);
+ const people=predictions.filter(p=>p.class==="person"&&p.score>=confidence&&(p.bbox[2]*p.bbox[3])/(el.detect.width*el.detect.height)>=minArea);
+ if(!people.length)return{hit:false,changed:false};
+ const largest=[...people].sort((a,b)=>b.bbox[2]*b.bbox[3]-a.bbox[2]*a.bbox[3])[0],conf=Math.max(...people.map(p=>p.score)),area=Math.max(...people.map(p=>(p.bbox[2]*p.bbox[3])/(el.detect.width*el.detect.height))),shp=sharpness(el.detect),score=.5*conf+.3*Math.min(1,area*4)+.2*Math.min(1,shp/25),hash=dHash(el.detect,largest.bbox),mapped=people.map(p=>({confidence:+p.score.toFixed(5),bbox:p.bbox.map(v=>+(v/scale).toFixed(2))}));
+ const changed=await considerFrame({time:+t.toFixed(3),score:+score.toFixed(6),sharpness:+shp.toFixed(4),confidence:+conf.toFixed(6),people:mapped,hash},dupThreshold,maxFrames);
+ if(changed)renderGallery();
+ return{hit:true,changed}
+}
+async function processVideo(){
+ if(processing)return;if(!model){setStatus("人物模型尚未就绪。");return}
+ try{await waitMetadata()}catch(e){setStatus(e.message);return}
+ if(!Number.isFinite(el.video.duration)||el.video.duration<=0){setStatus("无法读取视频时长。");return}
+ resetResults();processing=true;stopFlag=false;el.start.disabled=true;el.cancel.disabled=false;el.progress.value=0;el.video.pause();
+ const mode=el.mode.value,confidence=Math.min(.99,Math.max(.1,Number(el.confidence.value)||.55)),minArea=Math.max(0,Number(el.minArea.value)||0),dupThreshold=Math.max(0,Number(el.dup.value)||8),maxFrames=Math.max(1,Number(el.max.value)||100);
+ const scale=Math.min(1,768/el.video.videoWidth);el.detect.width=Math.max(1,Math.round(el.video.videoWidth*scale));el.detect.height=Math.max(1,Math.round(el.video.videoHeight*scale));const ctx=el.detect.getContext("2d",{willReadFrequently:true});
+ const params={ctx,scale,confidence,minArea,dupThreshold,maxFrames};let sceneSamples=0,detectorRuns=0,hitSamples=0;
+ try{
+  if(mode==="adaptive"){
+   const pre=Math.max(.25,Number(el.sceneInterval.value)||1),threshold=Math.min(.5,Math.max(.02,Number(el.sceneThreshold.value)||.08)),maxGap=Math.max(2,Number(el.maxGap.value)||10),scene=document.createElement("canvas");
+   scene.width=32;scene.height=Math.max(18,Math.round(32*el.video.videoHeight/el.video.videoWidth));
+   const sctx=scene.getContext("2d",{willReadFrequently:true});let previous=null,lastDetect=-Infinity;
+   for(let t=0;t<el.video.duration;t+=pre){
+    if(stopFlag)break;await seekTo(t);sctx.drawImage(el.video,0,0,scene.width,scene.height);const sig=sceneSignature(scene),diff=sceneDifference(previous,sig),candidate=!previous||diff>=threshold||(t-lastDetect)>=maxGap;
+    sceneSamples++;previous=sig;
+    if(candidate){lastDetect=t;detectorRuns++;const r=await detectCurrentFrame(t,params);if(r.hit)hitSamples++}
+    el.progress.value=Math.min(1,(t+pre)/el.video.duration);setStatus(`自适应扫描 ${fmt(t)} / ${fmt(el.video.duration)} · 预扫 ${sceneSamples} · AI检测 ${detectorRuns} · 命中人物 ${hitSamples} · 保留 ${results.length} 张`)
+   }
+  }else{
+   const interval=Math.max(.1,Number(el.interval.value)||1);
+   for(let t=0;t<el.video.duration;t+=interval){
+    if(stopFlag)break;await seekTo(t);sceneSamples++;detectorRuns++;const r=await detectCurrentFrame(t,params);if(r.hit)hitSamples++;el.progress.value=Math.min(1,(t+interval)/el.video.duration);setStatus(`固定扫描 ${fmt(t)} / ${fmt(el.video.duration)} · AI检测 ${detectorRuns} · 命中人物 ${hitSamples} · 保留 ${results.length} 张`)
+   }
+  }
+  lastRunStats={mode,scene_samples:sceneSamples,detector_runs:detectorRuns,person_hits:hitSamples,retained_frames:results.length};
+  renderGallery();setStatus(stopFlag?`已停止：AI检测 ${detectorRuns} 次，保留 ${results.length} 张人物关键帧。`:`完成：AI检测 ${detectorRuns} 次，命中人物 ${hitSamples} 次，保留 ${results.length} 张关键帧。`)
+ }catch(e){console.error(e);setStatus("处理失败："+e.message+"。如果使用 URL，请改用本地视频文件测试，部分站点禁止跨域读取视频帧。")}finally{processing=false;el.start.disabled=false;el.cancel.disabled=true}
+}
 el.start.addEventListener("click",processVideo);el.cancel.addEventListener("click",()=>{stopFlag=true;el.cancel.disabled=true;setStatus("正在停止…")});
 async function makeContactSheet(){if(!results.length)throw new Error("没有可生成的关键帧");const cols=Math.min(4,results.length),cellW=320,imgH=180,labelH=32,rows=Math.ceil(results.length/cols),c=document.createElement("canvas");c.width=cols*cellW;c.height=rows*(imgH+labelH);const x=c.getContext("2d");x.fillStyle="#0b1020";x.fillRect(0,0,c.width,c.height);for(let i=0;i<results.length;i++){const img=await createImageBitmap(results[i].blob),cx=(i%cols)*cellW,cy=Math.floor(i/cols)*(imgH+labelH),ratio=Math.min(cellW/img.width,imgH/img.height),w=img.width*ratio,h=img.height*ratio;x.fillStyle="#050811";x.fillRect(cx,cy,cellW,imgH);x.drawImage(img,cx+(cellW-w)/2,cy+(imgH-h)/2,w,h);img.close();x.fillStyle="#e8eef7";x.font="14px system-ui";x.fillText(`#${String(i+1).padStart(3,"0")}  ${fmt(results[i].time)}  score ${results[i].score.toFixed(3)}`,cx+10,cy+imgH+21)}return canvasBlob(c,"image/jpeg",.9)}
 el.json.addEventListener("click",()=>saveBlob(new Blob([JSON.stringify(manifest(),null,2)],{type:"application/json"}),"people.json"));
